@@ -5,6 +5,7 @@
 Ничего не угадывает: каждая правка ищет точное место и падает, если его нет,
 чтобы новая версия Postiz не собралась молча наполовину переодетой.
 """
+import colorsys
 import re
 import shutil
 import sys
@@ -33,7 +34,56 @@ COLORS = {
     "ae8afc": "DD5E2C",
     "b69dec": "DD5E2C",
     "fc69ff": "DD5E2C",
+    "622ff6": "C2410C",
+    "d82d7e": "A5360A",
+    "ff3ea2": "DD5E2C",
 }
+# Всё остальное фиолетовое и малиновое в интерфейсе: тот же цвет, но с оттенком кирпичного (светлота и насыщенность свои).
+BRICK_HUE = colorsys.rgb_to_hls(0xC2 / 255, 0x41 / 255, 0x0C / 255)[0]
+# Цвета чужих брендов, которые должны остаться своими: фоны постов Facebook, знак Farcaster.
+HUE_KEEP = {
+    "apps/frontend/src/components/new-launch/providers/facebook/facebook.background.ts",
+    "apps/frontend/src/components/auth/providers/farcaster.provider.tsx",
+}
+
+
+def is_violet(r, g, b):
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    return 250 <= h * 360 <= 345 and s > 0.3 and v > 0.2
+
+
+def to_brick(r, g, b):
+    _, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    return [round(x * 255) for x in colorsys.hls_to_rgb(BRICK_HUE, l, s)]
+
+
+def shift_hex(m):
+    h = m.group(2)
+    rgb = [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+    if not is_violet(*rgb):
+        return m.group(0)
+    return m.group(1) + "%02X%02X%02X" % tuple(to_brick(*rgb))
+
+
+def shift_rgb(m):
+    rgb = [int(x) for x in m.group(2, 3, 4)]
+    if not is_violet(*rgb):
+        return m.group(0)
+    return m.group(1) + "%d, %d, %d" % tuple(to_brick(*rgb))
+
+
+HEX_RE = re.compile(r"(#|%23)([0-9a-fA-F]{6})(?![0-9a-fA-F])")
+RGB_RE = re.compile(r"(rgba?\()(\d+),\s*(\d+),\s*(\d+)")
+
+
+def violet_left(text):
+    for m in HEX_RE.finditer(text):
+        h = m.group(2)
+        if is_violet(*[int(h[i:i + 2], 16) for i in (0, 2, 4)]):
+            yield m.group(0)
+    for m in RGB_RE.finditer(text):
+        if is_violet(*[int(x) for x in m.group(2, 3, 4)]):
+            yield m.group(0)
 COLOR_DIRS = ["apps/frontend/src", "libraries/react-shared-libraries/src", "apps/frontend/public"]
 COLOR_EXT = {".ts", ".tsx", ".scss", ".css", ".svg"}
 
@@ -103,6 +153,53 @@ def main(src):
         "return url.hostname!;",
     )
 
+    # 4a. Помощник CopilotKit (кнопка чата в окне поста) и пункт «Agent» в меню: ключа нейросети нет, подпись чужая.
+    modal = fe / "src/components/new-launch/manage.modal.tsx"
+    replace_once(modal, r"\n\s*<CopilotPopup\b.*?/>", "", re.S)
+    replace_once(modal, r"import \{ CopilotPopup \} from '@copilotkit/react-ui';\n", "")
+    replace_once(
+        fe / "src/components/layout/top.menu.tsx",
+        r"\{\s*name: 'Agent',.*?path: '/agents',\s*\},\s*",
+        "",
+        re.S,
+    )
+
+    # 4b. Номер версии Postiz внизу колонки каналов.
+    replace_once(
+        fe / "src/components/launches/launches.component.tsx",
+        r"<div>\s*\{process\.env\.NEXT_PUBLIC_VERSION\s*\?\s*process\.env\.NEXT_PUBLIC_VERSION\s*:\s*''\}\s*</div>",
+        "",
+    )
+
+    # 4c. Огонёк серии публикаций в шапке.
+    lay = fe / "src/components/new-layout/layout.component.tsx"
+    replace_once(lay, r'<StreakComponent />\s*<div className="w-\[1px\] h-\[20px\] bg-blockSeparator mobile:hidden" />\s*', "")
+    replace_once(lay, r"import \{ StreakComponent \}[^\n]*\n", "")
+
+    # 4d. Страница входа: без кнопок чужих входов (Google не настроен) и без ссылки на регистрацию (она закрыта).
+    login = fe / "src/components/auth/login.tsx"
+    replace_once(
+        login,
+        r'<div className="text-\[14px\] mt-\[32px\] mb-\[12px\]">\s*\{t\(\'continue_with\'.*?\{t\(\'or\', \'or\'\)\}</div>\s*</div>\s*</div>',
+        '<div className="flex flex-col mt-[32px]">',
+        re.S,
+    )
+    replace_once(login, r'<p className="mt-4 text-sm">\s*\{t\(\'don_t_have_an_account\'.*?</p>\s*', "", re.S)
+
+    # 4e. TikTok: видимость ролика выбирает человек, заранее ничего не стоит (правило TikTok для прямой публикации).
+    replace_once(
+        fe / "src/components/new-launch/providers/tiktok/tiktok.provider.tsx",
+        r"\{\.\.\.register\('privacy_level', \{\s*value: 'PUBLIC_TO_EVERYONE',\s*\}\)\}",
+        "{...register('privacy_level')}",
+    )
+    # Если видимость всё же пришла пустой, ролик уходит закрытым, а не всем.
+    for f in ("tiktok.provider.ts", "tiktok.business.provider.ts"):
+        replace_once(
+            src / "libraries/nestjs-libraries/src/integrations/social" / f,
+            r"privacy_level \|\| 'PUBLIC_TO_EVERYONE'",
+            "privacy_level || 'SELF_ONLY'",
+        )
+
     # 5. Слово Postiz в надписях → Energie Bună Planner.
     renamed = 0
     for p in files(src, TEXT_DIRS, TEXT_EXT):
@@ -120,6 +217,9 @@ def main(src):
             # и в обычной записи, и в закодированной внутри картинок data:url (%23 вместо #)
             new = re.sub("(#|%23)" + old, lambda m: m.group(1) + col, new, flags=re.I)
         new = re.sub(r"rgba?\(97, ?43, ?211", lambda m: m.group(0).split("(")[0] + "(194, 65, 12", new)
+        if str(p.relative_to(src)) not in HUE_KEEP:
+            new = HEX_RE.sub(shift_hex, new)
+            new = RGB_RE.sub(shift_rgb, new)
         if new != t:
             p.write_text(new, errors="surrogateescape")
             recolored += 1
@@ -129,7 +229,8 @@ def main(src):
     purple = [
         str(p.relative_to(src))
         for p in files(src, COLOR_DIRS, COLOR_EXT)
-        if re.search("612bd3", p.read_text(errors="surrogateescape"), re.I)
+        if str(p.relative_to(src)) not in HUE_KEEP
+        and next(violet_left(p.read_text(errors="surrogateescape")), None)
     ]
     if left or purple:
         fail(f"осталось Postiz: {left[:10]}, фиолетовый: {purple[:10]}")

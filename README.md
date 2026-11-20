@@ -4,7 +4,8 @@ Internal publishing tool of Energie Bună (energiebuna.md), self-hosted at https
 
 Based on [Postiz](https://github.com/gitroomhq/postiz-app) (AGPL-3.0), version in `VERSION`, modified by Energie Bună:
 Energie Bună brand mark, name and colors instead of the Postiz ones, a brand panel on the sign-in page,
-the sign-in cookie bound to the planner host. The full modification is `rebrand.py` with the files in `assets/`;
+the sign-in cookie bound to the planner host. Since eb2 also: no AI assistant, version label, streak badge,
+third-party sign-in or sign-up link; TikTok video visibility has no preset and must be chosen by the user. The full modification is `rebrand.py` with the files in `assets/`;
 applied to the upstream tag it gives the exact source of the running image. License: AGPL-3.0, as upstream.
 
 ## Как устроено (для своих)
